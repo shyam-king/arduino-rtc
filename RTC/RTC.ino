@@ -308,6 +308,10 @@ uint8_t receiveDataFromRTC(uint8_t address, uint8_t * data, uint8_t dataBytes) {
     return 0; //no error
 }
 
+
+/////////////////////
+// Utility methods //
+/////////////////////
 /*
     Function name: RTC_getTime
     Input: none 
@@ -317,10 +321,6 @@ uint8_t receiveDataFromRTC(uint8_t address, uint8_t * data, uint8_t dataBytes) {
             byte 1: minutes:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 2: hours:      <0> <12/24!> <20/AM!-PM><10><4 bits units>
  */
-
-/////////////////////
-// Utility methods //
-/////////////////////
 Time RTC_getTime() {
     uint8_t data[3];
     Time time;
@@ -328,12 +328,38 @@ Time RTC_getTime() {
     
     time.seconds = (data[0] & 0x0F) + ((data[0]&0xF0)>>4) * 10;
     time.minutes = (data[1] & 0x0F) + ((data[1]&0xF0)>>4) * 10;
+    if (data[2] & 0x40) {
+        //12 hour mode 
+        //set am-pm
+        time.am = !(data[2] & 0x20);
+
+        //get hours
+        time.hours = (data[2] & 0x0F) + ((data[2] & 0x10)>>4) * 10;
+    } 
+    else {
+        //24 hour mode 
+        time.hours = (data[2] & 0x0F); //units place 
+        if (data[2] & 0x20) time.hours += 20;
+        if (data[2] & 0x10) time.hours += 10;
+
+        if (time.hours == 0) {
+            time.hours = 12;
+        } 
+
+        if (time.hours > 12) {
+            time.hours -= 12;
+            time.am = false;
+        }
+        else time.am = true;
+    }
     return time;
 }
 
 
 int main() {
     initI2C();
+    initUSART();
+
     uint8_t data = 2;
     uint8_t address = 0x04;
     uint8_t error = 0;
@@ -346,6 +372,15 @@ int main() {
     error = receiveDataFromRTC(address, &data, 1);
     while (1) {
         time = RTC_getTime();
+        USART_sendData("Time: ");
+        USART_sendData((uint16_t)time.hours);
+        USART_sendData(" : ");
+        USART_sendData((uint16_t)time.minutes);
+        USART_sendData(" : ");
+        USART_sendData((uint16_t)time.seconds);
+        USART_sendData(" ");
+        if (time.am) USART_sendData(" am\n");
+        else USART_sendData(" pm\n");
     }
     
     return 0;
