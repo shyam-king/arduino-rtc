@@ -42,8 +42,7 @@ struct Time {
 };
 
 struct Date {
-    uint8_t date, month, year;
-    char day[4];
+    uint8_t date, month, year, day;
 };
 
 
@@ -83,7 +82,7 @@ void USART_sendByte(uint8_t data) {
     Logic: Send a string to the serial monitor
     Example call: USART_sendData("Hello world!\n");
 */
-void USART_sendData(char* data) {
+void USART_sendData(const char* data) {
     while(*data) {
         USART_sendByte(*data);
         data++;
@@ -362,8 +361,8 @@ void RTC_getTime(Time* time) {
 
 /*
     Function name: RTC_getDate
-    Input: Time structure to be filled 
-    Output: Date : struct Date filled with the current date from the RTC in 12 hour format
+    Input: Date structure to be filled 
+    Output: None
     Logic: obtain current date from the address starting at 0x03 (4 bytes) corresponding to 
             byte 0: day:    <0 for 5 bits> <3 bits mapping to day>
             byte 1: date:   <2 bit 0> <2 bits tens place> <4 bits units place>
@@ -374,19 +373,51 @@ void RTC_getDate(Date* date) {
     uint8_t data[4];
     receiveDataFromRTC(0x03, data, 4);
 
-    strcpy(date->day, map_day[data[0]]);
+    date->day = data[0];
     date->date = (data[1] & 0x0F) + ((data[1]&0xF0)*10);
     date->month = (data[2] & 0x0F) + ((data[2]&0x1F)*10);
     date->year = (data[3] & 0x0F) + ((data[3] & 0xF0)*10) + ((data[2]&0x80) * 100);
+}
+
+/*
+    Function name: RTC_sendTime
+    Input: Time to be sent 
+    Output: None 
+    Logic : set the time as (address 0x00)
+            byte 0: seconds:    <1 bit 0> <3 bits tens place> <4 bits units place>
+            byte 1: minutes:    <1 bit 0> <3 bits tens place> <4 bits units place>
+            byte 2: hours:      <0> <12/24!> <20/AM!-PM><10><4 bits units>
+ */
+void RTC_sendTime(Time time) {
+    uint8_t data[3] = {0, 0, 0};
+
+    //fill byte 0
+    data[0] = (time.seconds % 10) | ((time.seconds/10) << 4); 
+
+    //fill byte 1
+    data[1] = (time.minutes % 10) | ((time.minutes)/10) << 4;
+
+    //fill byte 2
+    data[2] = (time.hours % 10) | ((time.hours / 10) << 4) 
+                | ((!time.am) << 5) //am/pm
+                | (1 << 6); //12 hour mode
+
+    sendDataToRTC(0x00, data, 3);
 }
 
 
 int main() {
     initI2C();
     initUSART();
-    
+
     Time time ;
     Date date;
+
+    time.seconds = 0;
+    time.minutes = 10;
+    time.hours = 9;
+    time.am = false;
+    RTC_sendTime(time);
 
     while (1) {
         RTC_getDate(&date);
@@ -401,7 +432,7 @@ int main() {
         if (time.am) USART_sendData(" am; ");
         else USART_sendData(" pm; ");
 
-        USART_sendData(date.day);
+        USART_sendData(map_day[date.day]);
         USART_sendData(", ");
         USART_sendData((uint16_t)date.date);
         USART_sendData(" / ");
