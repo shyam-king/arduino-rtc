@@ -9,6 +9,9 @@
     Structs: Time, Date
 */
 
+// TODO MAKE ALARM alarm RING 
+// STOP ALARM AT WILL
+
 #include<avr/interrupt.h>
 #include<avr/io.h>
 
