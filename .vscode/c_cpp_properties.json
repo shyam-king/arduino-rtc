@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "/home/shyam/Downloads/arduino-1.8.9/tools/",
+                "/home/shyam/Downloads/arduino-1.8.9/hardware/arduino/avr/",
+                "/home/shyam/Downloads/arduino-1.8.9/hardware/arduino/avr/**",
+                "/home/shyam/Downloads/arduino-1.8.9/tools/**"
+            ],
+            "forcedInclude": [
+                "/home/shyam/Downloads/arduino-1.8.9/hardware/arduino/avr/cores/arduino/Arduino.h"
+            ],
+            "intelliSenseMode": "gcc-x64",
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}
