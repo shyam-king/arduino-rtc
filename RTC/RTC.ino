@@ -35,6 +35,11 @@ const int pin_sda = 4; //PORTC
 const char* map_day[] = {
     "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
+uint8_t data = 'a';
+
+volatile char USART_DATA_BUFFER[32] = "";
+volatile uint8_t USART_DATA_INDEX = 0;
+volatile bool USART_BUFFER_READY = false;
 
 struct Time {
     uint8_t seconds, hours, minutes;
@@ -60,7 +65,7 @@ struct Date {
 void initUSART() {
     UCSR0C = (1 << UCSZ00) | (1 << UCSZ01); //asynchronous, 8 bit data
     UBRR0 = 103; //set baud rate = 9600 bps
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0); //enable RX and TX
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0); //enable RX and TX
 }
 
 /*
@@ -122,11 +127,37 @@ void USART_sendData(uint16_t data) {
     Logic: Send a float to the serial monitor
     Example call: USART_sendData(10.0);
 */
-uint8_t USART_getByte() {
-    uint8_t data;
-    while(!(UCSR0A & (1 << RXC0)));
-    data = UDR0;
-    return data;
+uint8_t USART_getByte(uint8_t *data) {
+    if (UCSR0A & (1 << RXC0)) {
+        *data = UDR0;
+        return true;
+    }
+    return false;
+}
+
+/*
+    TODO
+ */
+void USART_readBuffer(char *dest) {
+    strcpy(dest, USART_DATA_BUFFER);
+    USART_DATA_INDEX = 0;
+    USART_BUFFER_READY = false;
+}
+
+/*
+    TODO: 
+ */
+ISR(USART_RX_vect) {
+    if (USART_BUFFER_READY == false) {
+        char data = UDR0;
+        if (data == '\n' || data == '\r' || USART_DATA_INDEX == 31) 
+        {
+            data = '\0';
+            USART_BUFFER_READY = true;
+        }
+        USART_DATA_BUFFER[USART_DATA_INDEX] = data;
+        USART_DATA_INDEX++;
+    }
 }
 
 //////////////////////////////
@@ -430,12 +461,16 @@ void RTC_sendDate(Date date) {
     sendDataToRTC(0x03, data, 4);
 }
 
+
 int main() {
     initI2C();
     initUSART();
+    sei();
 
     Time time ;
     Date date;
+
+    char data[32] = "nothing";
 
     time.seconds = 0;
     time.minutes = 10;
@@ -470,7 +505,13 @@ int main() {
         USART_sendData((uint16_t)date.month);
         USART_sendData(" / ");
         USART_sendData((uint16_t)date.year);
+        USART_sendData("    : ");
+        USART_sendData(data);
         USART_sendByte('\n');
+
+        if (USART_BUFFER_READY) {
+            USART_readBuffer(data);
+        }
     }
     
     return 0;
