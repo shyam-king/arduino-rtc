@@ -40,6 +40,7 @@ uint8_t data = 'a';
 volatile char USART_DATA_BUFFER[32] = "";
 volatile uint8_t USART_DATA_INDEX = 0;
 volatile bool USART_BUFFER_READY = false;
+volatile bool alarm_ringing = false;
 
 struct Time {
     uint8_t seconds, hours, minutes;
@@ -552,10 +553,25 @@ int main() {
         USART_sendData("\nENTER \"time\" FOR changing TIME\n");
         USART_sendData("ENTER \"date\" FOR changing DATE\n");
         USART_sendData("ENTER \"alarm\" FOR setting alarm\n");
-        USART_sendData("ENTER \"now\" FOR current time\n");
+        USART_sendData("ANYTHING ELSE WILL DISPLAY Now\n");
 
         //wait for user-input
-        while (!USART_BUFFER_READY);
+        while (!USART_BUFFER_READY) {
+            if (RTC_checkAlarm0()) {
+                if (alarm_ringing) {
+                    USART_sendData("Alarm stopped!");
+                    alarm_ringing = false;
+                }
+                else {
+                    USART_sendData("\n\nALARM HIT!\n\n");
+                    alarm_ringing = true;
+                    time.minutes += 2;
+                    RTC_setAlarm0(time);
+                    time.minutes -= 2;
+                }
+            } 
+        }
+
         USART_readBuffer(data);
 
         if (strcmp(data, "time") == 0) {
@@ -645,7 +661,39 @@ int main() {
 
             RTC_sendDate(date);
         }
-        
+        else if (strcmp(data, "alarm") == 0) {
+            USART_sendData("Enter hour:\n");
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            if (strlen(data) == 2) {
+                time.hours = data[1] - '0' + (data[0] - '0') * 10;
+            }
+            else {
+                time.hours = data[0] - '0';
+            }
+
+            USART_sendData("Enter minutes:\n");
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            if (strlen(data) == 2) {
+                time.minutes = data[1] - '0' + (data[0] - '0') * 10;
+            }
+            else {
+                time.minutes = data[0] - '0';
+            }
+
+            USART_sendData("If AM enter 1:\n");
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            if (data[0] == '1') {
+                time.am = true;
+            }
+            else {
+                time.am = false;
+            }
+
+            RTC_setAlarm0(time);
+        } 
     }
     
     return 0;
