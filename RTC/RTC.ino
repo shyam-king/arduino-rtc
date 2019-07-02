@@ -2,9 +2,11 @@
     AUTHOR: Shyam
     Domain: Embedded and Electronics
     Sub Domain: Embedded Systems
-    Functions: initI2C, sendDataToRTC, receiveDataFromRTC
+    Functions: initI2C, sendDataToRTC, receiveDataFromRTC, initUSART, USART_getByte, USART_sendByte, USART_sendData,
+                RTC_getDate, RTC_getTime
     Macros: PINMODEINPUT, PINMODEOUTPUT, PINHIGH, PINLOW, PINPULLUP
-    Global variables: pin_scl, pin_sda
+    Global variables: pin_scl, pin_sda, map_day
+    Structs: Time, Date
 */
 
 #include<avr/interrupt.h>
@@ -30,6 +32,9 @@
 
 const int pin_scl = 5; //PORTC
 const int pin_sda = 4; //PORTC
+const char* map_day[] = {
+    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+};
 
 struct Time {
     uint8_t seconds, hours, minutes;
@@ -40,6 +45,8 @@ struct Date {
     uint8_t date, month, year;
     char day[4];
 };
+
+
 
 //////////////////
 // UART methods //
@@ -314,73 +321,94 @@ uint8_t receiveDataFromRTC(uint8_t address, uint8_t * data, uint8_t dataBytes) {
 /////////////////////
 /*
     Function name: RTC_getTime
-    Input: none 
-    Output: Time : struct Time filled with the current time from the RTC in 12 hour format
+    Input: Time structure to be filled 
+    Output: none
     Logic: obtain current time from the address starting at 0x00 (3 bytes) corresponding to 
             byte 0: seconds:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 1: minutes:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 2: hours:      <0> <12/24!> <20/AM!-PM><10><4 bits units>
  */
-Time RTC_getTime() {
+void RTC_getTime(Time* time) {
     uint8_t data[3];
-    Time time;
     receiveDataFromRTC(0x00, data, 3);
     
-    time.seconds = (data[0] & 0x0F) + ((data[0]&0xF0)>>4) * 10;
-    time.minutes = (data[1] & 0x0F) + ((data[1]&0xF0)>>4) * 10;
+    time->seconds = (data[0] & 0x0F) + ((data[0]&0xF0)>>4) * 10;
+    time->minutes = (data[1] & 0x0F) + ((data[1]&0xF0)>>4) * 10;
     if (data[2] & 0x40) {
         //12 hour mode 
         //set am-pm
-        time.am = !(data[2] & 0x20);
+        time->am = !(data[2] & 0x20);
 
         //get hours
-        time.hours = (data[2] & 0x0F) + ((data[2] & 0x10)>>4) * 10;
+        time->hours = (data[2] & 0x0F) + ((data[2] & 0x10)>>4) * 10;
     } 
     else {
         //24 hour mode 
-        time.hours = (data[2] & 0x0F); //units place 
-        if (data[2] & 0x20) time.hours += 20;
-        if (data[2] & 0x10) time.hours += 10;
+        time->hours = (data[2] & 0x0F); //units place 
+        if (data[2] & 0x20) time->hours += 20;
+        if (data[2] & 0x10) time->hours += 10;
 
-        if (time.hours == 0) {
-            time.hours = 12;
+        if (time->hours == 0) {
+            time->hours = 12;
         } 
 
-        if (time.hours > 12) {
-            time.hours -= 12;
-            time.am = false;
+        if (time->hours > 12) {
+            time->hours -= 12;
+            time->am = false;
         }
-        else time.am = true;
+        else time->am = true;
     }
-    return time;
+}
+
+/*
+    Function name: RTC_getDate
+    Input: Time structure to be filled 
+    Output: Date : struct Date filled with the current date from the RTC in 12 hour format
+    Logic: obtain current date from the address starting at 0x03 (4 bytes) corresponding to 
+            byte 0: day:    <0 for 5 bits> <3 bits mapping to day>
+            byte 1: date:   <2 bit 0> <2 bits tens place> <4 bits units place>
+            byte 2: month:  <1 bit century> <2 bits 0> <1 bits tens place><4 bits units>
+            byte 3: year:   <4bit tens place> <4bits units>
+ */
+void RTC_getDate(Date* date) {
+    uint8_t data[4];
+    receiveDataFromRTC(0x03, data, 4);
+
+    strcpy(date->day, map_day[data[0]]);
+    date->date = (data[1] & 0x0F) + ((data[1]&0xF0)*10);
+    date->month = (data[2] & 0x0F) + ((data[2]&0x1F)*10);
+    date->year = (data[3] & 0x0F) + ((data[3] & 0xF0)*10) + ((data[2]&0x80) * 100);
 }
 
 
 int main() {
     initI2C();
     initUSART();
-
-    uint8_t data = 2;
-    uint8_t address = 0x04;
-    uint8_t error = 0;
+    
     Time time ;
-    time.seconds = 0;
-    time.minutes = 0;
+    Date date;
 
-    error = sendDataToRTC(address, &data, 1);
-    data = 0;
-    error = receiveDataFromRTC(address, &data, 1);
     while (1) {
-        time = RTC_getTime();
-        USART_sendData("Time: ");
+        RTC_getDate(&date);
+        RTC_getTime(&time);
+        USART_sendData("Now: ");
         USART_sendData((uint16_t)time.hours);
         USART_sendData(" : ");
         USART_sendData((uint16_t)time.minutes);
         USART_sendData(" : ");
         USART_sendData((uint16_t)time.seconds);
         USART_sendData(" ");
-        if (time.am) USART_sendData(" am\n");
-        else USART_sendData(" pm\n");
+        if (time.am) USART_sendData(" am; ");
+        else USART_sendData(" pm; ");
+
+        USART_sendData(date.day);
+        USART_sendData(", ");
+        USART_sendData((uint16_t)date.date);
+        USART_sendData(" / ");
+        USART_sendData((uint16_t)date.month);
+        USART_sendData(" / ");
+        USART_sendData((uint16_t)date.year);
+        USART_sendByte('\n');
     }
     
     return 0;
