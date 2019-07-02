@@ -374,9 +374,9 @@ void RTC_getDate(Date* date) {
     receiveDataFromRTC(0x03, data, 4);
 
     date->day = data[0];
-    date->date = (data[1] & 0x0F) + ((data[1]&0xF0)*10);
-    date->month = (data[2] & 0x0F) + ((data[2]&0x1F)*10);
-    date->year = (data[3] & 0x0F) + ((data[3] & 0xF0)*10) + ((data[2]&0x80) * 100);
+    date->date = (data[1] & 0x0F) + (((data[1]&0xF0)>>4)*10);
+    date->month = (data[2] & 0x0F) + (((data[2]&0x1F)>>4)*10);
+    date->year = (data[3] & 0x0F) + (((data[3] & 0xF0)>>4)*10) + (((data[2]&0x80)>>7) * 100);
 }
 
 /*
@@ -405,6 +405,30 @@ void RTC_sendTime(Time time) {
     sendDataToRTC(0x00, data, 3);
 }
 
+/*
+    Function name: RTC_sendDate
+    Input: Date date: to be sent 
+    Output: None 
+    Logic : set the date as (address 0x03)
+            byte 0: day:    <0 for 5 bits> <3 bits mapping to day>
+            byte 1: date:   <2 bit 0> <2 bits tens place> <4 bits units place>
+            byte 2: month:  <1 bit century> <2 bits 0> <1 bits tens place><4 bits units>
+            byte 3: year:   <4bit tens place> <4bits units>
+ */
+void RTC_sendDate(Date date) {
+    uint8_t data[4] = {0, 0, 0, 0};
+
+    //fill byte 0
+    data[0] = date.day;
+    //fill byte 1
+    data[1] = (date.date % 10) | ((date.date/10) << 4);
+    //fill byte 2
+    data[2] = (date.month % 10) | ((date.month / 10) << 4) | ((date.year / 100) << 7);
+    //fill byte 3
+    data[3] = (date.year % 10) | (((date.year / 10)%10) << 4);
+
+    sendDataToRTC(0x03, data, 4);
+}
 
 int main() {
     initI2C();
@@ -417,7 +441,14 @@ int main() {
     time.minutes = 10;
     time.hours = 9;
     time.am = false;
+
+    date.day = 2;
+    date.date = 2;
+    date.month = 7;
+    date.year = 19;
+
     RTC_sendTime(time);
+    RTC_sendDate(date);
 
     while (1) {
         RTC_getDate(&date);
