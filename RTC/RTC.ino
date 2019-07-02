@@ -461,6 +461,49 @@ void RTC_sendDate(Date date) {
     sendDataToRTC(0x03, data, 4);
 }
 
+/*
+    TODO
+
+    0x07
+    byte 0: seconds:    <A1M1> <3 bits tens place> <4 bits units place>
+    byte 1: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
+    byte 2: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+    byte 3: if Date:        <A1M4> <DY/DT!> <2 bits tens place> <4 bits units place>
+            if Day :                          <2 0> <4 bits day>
+ */
+void RTC_setAlarm0(Time time) {
+    uint8_t data[4];
+
+    data[0] = 0;
+    data[1] = (time.minutes%10) | ((time.minutes)/10) << 4;
+    data[2] = (time.hours % 10) | ((time.hours)/10) << 4 | ((!time.am)<<5) | (1 << 6);
+    data[3] = 0x80;
+
+    //make sure alarm-flag is not set 
+    uint8_t flag;
+    receiveDataFromRTC(0x0F, &flag, 1);
+    flag &= !(1 << 0);
+    sendDataToRTC(0x0F, &flag, 1);
+
+    //send data
+    sendDataToRTC(0x07, data, 4);
+}
+
+/*
+TODO
+ */
+bool RTC_checkAlarm0() {
+    uint8_t data;
+    receiveDataFromRTC(0x0F, &data, 1);
+
+    if (data & (1 << 0)) {
+        data &= !(1 << 0);
+        sendDataToRTC(0x0F, &data, 1);
+        return true;
+    }
+
+    return false;
+}
 
 int main() {
     initI2C();
@@ -485,7 +528,14 @@ int main() {
     RTC_sendTime(time);
     RTC_sendDate(date);
 
+    time.hours = 9;
+    time.minutes = 11;
+
+    RTC_setAlarm0(time);
+
     while (1) {
+
+        //PRINT CURRENT DATE-TIME
         RTC_getDate(&date);
         RTC_getTime(&time);
         USART_sendData("Now: ");
@@ -511,6 +561,15 @@ int main() {
 
         if (USART_BUFFER_READY) {
             USART_readBuffer(data);
+        }
+
+        if (RTC_checkAlarm0()) {
+            if (strcmp(data, "ALARM HIT!"))
+            strcpy(data, "ALARM HIT!");
+            else 
+            strcpy (data, "ALARM DONE!");
+            time.minutes ++;
+            RTC_setAlarm0(time);
         }
     }
     
