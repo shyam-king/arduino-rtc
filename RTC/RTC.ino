@@ -550,8 +550,9 @@ int main() {
 
         //PRINT MENU
         USART_sendData("\nENTER \"time\" FOR changing TIME\n");
-        USART_sendData("\nENTER \"date\" FOR changing DATE\n");
-        USART_sendData("\nENTER \"alarm\" FOR setting alarm\n");
+        USART_sendData("ENTER \"date\" FOR changing DATE\n");
+        USART_sendData("ENTER \"alarm\" FOR setting alarm\n");
+        USART_sendData("ENTER \"now\" FOR current time\n");
 
         //wait for user-input
         while (!USART_BUFFER_READY);
@@ -599,6 +600,50 @@ int main() {
             }
 
             RTC_sendTime(time);
+        }
+        else if (strcmp(data, "date") == 0) {
+            USART_sendData("Enter day-of-the-week\n");
+            for (int i =0; i< 7; i++) {
+                USART_sendData((uint16_t)i);
+                USART_sendData(" : ");
+                USART_sendData(map_day[i]);
+                USART_sendByte('\n');
+            }
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            date.day = data[0] - '0';
+
+            USART_sendData("Enter date:\n");
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            if (strlen(data) == 2) {
+                date.date = data[1] - '0' + (data[0] - '0') * 10;
+            }
+            else {
+                date.date = data[0] - '0';
+            }
+
+            USART_sendData("Enter month:\n");
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            if (strlen(data) == 2) {
+                date.month = data[1] - '0' + (data[0] - '0') * 10;
+            }
+            else {
+                date.month = data[0] - '0';
+            }
+
+            USART_sendData("Enter year (0 - 99):\n");
+            while (!USART_BUFFER_READY);
+            USART_readBuffer(data);
+            if (strlen(data) == 2) {
+                date.year = data[1] - '0' + (data[0] - '0') * 10;
+            }
+            else {
+                date.year = data[0] - '0';
+            }
+
+            RTC_sendDate(date);
         }
         
     }
