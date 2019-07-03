@@ -2,19 +2,25 @@
     AUTHOR: Shyam
     Domain: Embedded and Electronics
     Sub Domain: Embedded Systems
-    Functions: initI2C, sendDataToRTC, receiveDataFromRTC, initUSART, USART_getByte, USART_sendByte, USART_sendData,
-                RTC_getDate, RTC_getTime
-    Macros: PINMODEINPUT, PINMODEOUTPUT, PINHIGH, PINLOW, PINPULLUP
-    Global variables: pin_scl, pin_sda, map_day
+    Functions: 
+        initUSART, USART_sendByte, USART_sendData, USART_getByte, USART_readBuffer
+        init I2C, sendDataToRTC, receiveDataFromRTC
+        initAlarm
+        RTC_getTime, RTC_getDate, RTC_sendTime, RTC_sendDate, RTC_setAlarm0, RTC_setAlarm1, RTC_checkAlarm0
+            RTC_checkAlarm1, RTC_getAlarm0
+        addTime, TimeSeconds, TimeHours, TimeMinutes
+    Macros: PINMODEINPUT, PINMODEOUTPUT, PINHIGH, PINLOW, PINPULLUP, PINTOGGLE
+    Global variables:   pin_scl, pin_sda, pin_speaker, map_day, USART_DATA_BUFFER, USART_DATA_INDEX, USART_BUFFER_READY,
+                        alarm_ringing
     Structs: Time, Date
 */
 
-// TODO MAKE ALARM alarm RING 
-// STOP ALARM AT WILL
-
+//REQUIRED HEADERS
 #include<avr/interrupt.h>
 #include<avr/io.h>
 
+
+//HELPER MACROS
 #define PINMODEOUTPUT(port, pin) DDR##port |= (1 << pin)
 #define PINMODEINPUT(port, pin) DDR##port &= !(1 << pin)
 #define PINTOGGLE(port, pin) PORT##port ^= (1 << pin)
@@ -34,19 +40,26 @@
 #define TW_MR_DA_ACK 0x50
 #define TW_MR_DA_NACK 0x58
 
+//pins
 const int pin_scl = 5; //PORTC
 const int pin_sda = 4; //PORTC
 const int pin_speaker = 0; //PORTB
+
+//day mapping (0-6 -> day of week)
 const char* map_day[] = {
     "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
-uint8_t data = 'a';
 
+//for async USART
 volatile char USART_DATA_BUFFER[32] = "";
 volatile uint8_t USART_DATA_INDEX = 0;
 volatile bool USART_BUFFER_READY = false;
+
+//for alarm speaker
 volatile bool alarm_ringing = false;
 
+
+//helper structs
 struct Date {
     uint8_t date, month, year, day;
 };
@@ -118,7 +131,7 @@ void USART_sendData(float data) {
     Input:  uint16_t data: the data to be sent
     Output: none
     Logic: Send a uint16_t to the serial monitor
-    Example call: USART_sendData(10.0);
+    Example call: USART_sendData((uint16_t)10));
 */
 void USART_sendData(uint16_t data) {
     char temp[10];
@@ -128,12 +141,17 @@ void USART_sendData(uint16_t data) {
 
 /*
     Function name: USART_getByte
-    Input:  none
-    Output: uint8_t : the byte received
-    Logic: Send a float to the serial monitor
-    Example call: USART_sendData(10.0);
+    Input:  uint8_t* data : pointer to store received byte
+    Output: bool : true if a byte was received and put in data
+    Logic: By checking the UCSR0A.RXC0 flag availability of data in UDR0 is known,
+            if data is available, it is stored and true is returned
+    Example call: 
+    uint8_t data;
+    if (USART_getByte(&data)) {
+        //do something with data
+    } 
 */
-uint8_t USART_getByte(uint8_t *data) {
+bool USART_getByte(uint8_t *data) {
     if (UCSR0A & (1 << RXC0)) {
         *data = UDR0;
         return true;
@@ -142,7 +160,13 @@ uint8_t USART_getByte(uint8_t *data) {
 }
 
 /*
-    TODO
+    Function name: USART_readBuffer 
+    Input:  char *dest: memory to be filled with received data (capacity 32 bytes)
+    Output: none 
+    Logic:  read the received data that is stored in the buffer
+    Example call: 
+    char data[32];
+    if (USART_BUFFER_READY) USART_readBuffer(data);
  */
 void USART_readBuffer(char *dest) {
     strcpy(dest, USART_DATA_BUFFER);
@@ -151,7 +175,8 @@ void USART_readBuffer(char *dest) {
 }
 
 /*
-    TODO: 
+    Function name: ISR(USART_RX_vect)
+    Logic: Whenever data is available it is appended to the buffer if the buffer has already been read 
  */
 ISR(USART_RX_vect) {
     if (USART_BUFFER_READY == false) {
@@ -173,19 +198,22 @@ ISR(USART_RX_vect) {
     Function name: initI2C
     Input: none
     Output: none
-    Logic:  
+    Logic:  The SDA and SCL pins are configured for I2C usage and the tranmission frequency is set at 
+            100 Khz
     Example call: initI2C();
  */
 void initI2C() {
+    //configure pins connected to the RTC Module
     PINMODEINPUT(C, pin_scl);
     PINMODEINPUT(C, pin_sda);
 
+    //pull up sda and scl lines to VCC = 5V
     PINPULLUP(C, pin_scl);
     PINPULLUP(C, pin_sda);
 
     //set I2C at 100 Khz
     TWBR = 72; 
-    TWSR &= !((1 << TWPS0) | (1 << TWPS1));
+    TWSR &= !((1 << TWPS0) | (1 << TWPS1)); // reset prescalar to 1
 }
 
 /*
@@ -199,6 +227,11 @@ void initI2C() {
             2 -> error : no slave acknowledgement (module address is wrong)
             3 -> no address acknowledgement
             4..5+dataBytes-> no data byte acknowledgement
+    Logic:  employs I2C protocol to send dataBytes number of bytes to the RTC module 
+    Example call: 
+    uint8_t data[3]; 
+    //set data bytes 
+    sendDataToRTC(0x0F, data, 3);
  */
 uint8_t sendDataToRTC(uint8_t address, uint8_t* data = NULL, uint8_t dataBytes = 0) {
     TWCR = (1 << TWEN) // make sure TWI is enabled
@@ -275,6 +308,12 @@ uint8_t sendDataToRTC(uint8_t address, uint8_t* data = NULL, uint8_t dataBytes =
             2 -> error : no slave acknowledgement (module address is wrong)
             3 -> no address acknowledgement
             4 -> no slave ack for reading mode
+    Logic:  employs I2C protocol receive dataBytes number of bytes from the RTC module
+            The address is sent in master transmission mode to set the register pointer of the RTC module
+            The data is received in master receiving mode
+    Example call: 
+    uint8_t data[2];
+    receiveDataFromRTC(0x0F, data, 2);
  */
 uint8_t receiveDataFromRTC(uint8_t address, uint8_t * data, uint8_t dataBytes) {
     //First set the memory pointer of RTC to required address
@@ -355,7 +394,13 @@ uint8_t receiveDataFromRTC(uint8_t address, uint8_t * data, uint8_t dataBytes) {
 // Alarm methods //
 ///////////////////
 
-
+/*
+    Function name:  initAlarm
+    Input:  none 
+    Output: none 
+    Logic:  Set up pins for speaker and the Timer for producing sound
+    Example call:   initAlarm();
+ */
 void initAlarm() {
     //set up pin
     PINMODEOUTPUT(B, pin_speaker);
@@ -368,6 +413,10 @@ void initAlarm() {
     TIMSK1 = (1 << 1); //interrupt enable 
 }
 
+/*
+    Function name: ISR(TIMER1_COMPA_vect)
+    Logic: toggle speaker pin to produce sound whenever alarm is ringing
+ */
 ISR(TIMER1_COMPA_vect) {
     if (alarm_ringing) {
         PINTOGGLE(B, pin_speaker);
@@ -386,6 +435,9 @@ ISR(TIMER1_COMPA_vect) {
             byte 0: seconds:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 1: minutes:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 2: hours:      <0> <12/24!> <20/AM!-PM><10><4 bits units>
+    Example call: 
+    Time time;
+    RTC_getTime(&time);
  */
 void RTC_getTime(Time* time) {
     uint8_t data[3];
@@ -421,13 +473,16 @@ void RTC_getTime(Time* time) {
 
 /*
     Function name: RTC_getDate
-    Input: Date structure to be filled 
+    Input:  Date structure to be filled 
     Output: None
-    Logic: obtain current date from the address starting at 0x03 (4 bytes) corresponding to 
+    Logic:  obtain current date from the address starting at 0x03 (4 bytes) corresponding to 
             byte 0: day:    <0 for 5 bits> <3 bits mapping to day>
             byte 1: date:   <2 bit 0> <2 bits tens place> <4 bits units place>
             byte 2: month:  <1 bit century> <2 bits 0> <1 bits tens place><4 bits units>
             byte 3: year:   <4bit tens place> <4bits units>
+    Example call:   
+    Date date;
+    RTC_getDate(&date);
  */
 void RTC_getDate(Date* date) {
     uint8_t data[4];
@@ -447,6 +502,10 @@ void RTC_getDate(Date* date) {
             byte 0: seconds:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 1: minutes:    <1 bit 0> <3 bits tens place> <4 bits units place>
             byte 2: hours:      <0> <12/24!> <20/AM!-PM><10><4 bits units>
+    Example call:
+    Time time;
+    //set time 
+    RTC_sendTime(time);
  */
 void RTC_sendTime(Time time) {
     uint8_t data[3] = {0, 0, 0};
@@ -474,6 +533,10 @@ void RTC_sendTime(Time time) {
             byte 1: date:   <2 bit 0> <2 bits tens place> <4 bits units place>
             byte 2: month:  <1 bit century> <2 bits 0> <1 bits tens place><4 bits units>
             byte 3: year:   <4bit tens place> <4bits units>
+    Example call:
+    Date date;
+    //set date 
+    RTC_sendDate(date);
  */
 void RTC_sendDate(Date date) {
     uint8_t data[4] = {0, 0, 0, 0};
@@ -491,14 +554,19 @@ void RTC_sendDate(Date date) {
 }
 
 /*
-    TODO
-
-    0x07
-    byte 0: seconds:    <A1M1> <3 bits tens place> <4 bits units place>
-    byte 1: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
-    byte 2: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
-    byte 3: if Date:        <A1M4> <DY/DT!> <2 bits tens place> <4 bits units place>
-            if Day :                          <2 0> <4 bits day>
+    Function name: RTC_setAlarm0
+    Input:  Time time: the time to set alarm (the seconds field is ignored)
+    Output: none
+    Logic:  set 4 bytes starting at 0x07
+            byte 0: seconds:    <A1M1> <3 bits tens place> <4 bits units place>
+            byte 1: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
+            byte 2: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+            byte 3: if Date:        <A1M4> <DY/DT!> <2 bits tens place> <4 bits units place>
+                    if Day :                          <2 0> <4 bits day>
+    Example call: 
+    Time time;
+    time.hours = 12; time.minutes = 0; time.am = true;
+    RTC_setAlarm0(time);
  */
 void RTC_setAlarm0(Time time) {
     uint8_t data[4];
@@ -519,13 +587,18 @@ void RTC_setAlarm0(Time time) {
 }
 
 /*
-    TODO
-
-    0x0B
-    byte 0: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
-    byte 1: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
-    byte 2: if Date:        <A1M4> <DY/DT!> <2 bits tens place> <4 bits units place>
-            if Day :                          <2 0> <4 bits day>
+    Function name: RTC_setAlarm0
+    Input:  Time time: the time to set alarm (the seconds field is ignored)
+    Output: none
+    Logic:  set 3 bytes starting at 0x0B
+            byte 0: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
+            byte 1: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+            byte 2: if Date:        <A1M4> <DY/DT!> <2 bits tens place> <4 bits units place>
+                    if Day :                          <2 0> <4 bits day>
+    Example call: 
+    Time time;
+    time.hours = 12; time.minutes = 0; time.am = true;
+    RTC_setAlarm1(time);
  */
 void RTC_setAlarm1(Time time) {
     uint8_t data[3];
@@ -544,7 +617,14 @@ void RTC_setAlarm1(Time time) {
 }
 
 /*
-TODO
+    Function name: RTC_checkAlarm0
+    Input:  none
+    Output: bool : returns true if alarm0 matches
+    Logic:  Read LSB of status register @ 0x0F
+    Example call: 
+    if (RTC_checkAlarm0()) {
+        //do something
+    }
  */
 bool RTC_checkAlarm0() {
     uint8_t data;
@@ -560,7 +640,14 @@ bool RTC_checkAlarm0() {
 }
 
 /*
-TODO
+    Function name: RTC_checkAlarm1
+    Input:  none
+    Output: bool : returns true if alarm1 matches
+    Logic:  Read 2nd LSB of status register @ 0x0F
+    Example call: 
+    if (RTC_checkAlarm1()) {
+        //do something
+    }
  */
 bool RTC_checkAlarm1() {
     uint8_t data;
@@ -576,11 +663,14 @@ bool RTC_checkAlarm1() {
 }
 
 /*
-    TODO
-
-    0x08
-    byte 0: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
-    byte 1: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+    Function name: RTC_getAlarm0
+    Input:  none;
+    Output: none 
+    Logic: Read 2 bytes @ 0x08
+        byte 0: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
+        byte 1: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+    Example call:
+    Time time = RTC_getAlarm0();
  */
 Time RTC_getAlarm0() {
     uint8_t data[2]; 
@@ -648,7 +738,13 @@ void addTime(Time* time, Time toAdd) {
     }
 }
 
-//TODO
+/*
+    Function name: TimeSeconds
+    Input:  uint8_T seconds: number of seconds 
+    Output: time : the time object representing seconds (s)
+    Logic:  fill returning time with corresponding seconds
+    Example call: Time time = TimeSeconds(50);
+ */
 Time TimeSeconds (uint8_t seconds) {
     Time t;
     t.seconds = seconds;
@@ -657,6 +753,13 @@ Time TimeSeconds (uint8_t seconds) {
     return t;
 }
 
+/*
+    Function name: TimeMinutes
+    Input:  uint8_T minutes: number of minutes 
+    Output: time : the time object representing minutes (m)
+    Logic:  fill returning time with corresponding minutes
+    Example call: Time time = TimeMinutes(50);
+ */
 Time TimeMinutes (uint8_t minutes) {
     Time t;
     t.minutes = minutes;
@@ -665,6 +768,13 @@ Time TimeMinutes (uint8_t minutes) {
     return t;
 }
 
+/*
+    Function name: TimeHours
+    Input:  uint8_T hours: number of hours 
+    Output: time : the time object representing hours (h)
+    Logic:  fill returning time with corresponding hours
+    Example call: Time time = TimeHours(11);
+ */
 Time TimeHours (uint8_t hours) {
     Time t;
     t.hours = hours;
@@ -721,7 +831,7 @@ int main() {
         USART_sendData(" ");
         if (alarm.am) USART_sendData("am)\n");
         else USART_sendData("pm)\n");
-        USART_sendData("ANYTHING ELSE WILL DISPLAY Now\n");
+        USART_sendData("\nAny other input will refresh\n");
 
         //wait for user-input
         while (!USART_BUFFER_READY) {
