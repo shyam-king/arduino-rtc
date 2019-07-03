@@ -17,6 +17,7 @@
 
 #define PINMODEOUTPUT(port, pin) DDR##port |= (1 << pin)
 #define PINMODEINPUT(port, pin) DDR##port &= !(1 << pin)
+#define PINTOGGLE(port, pin) PORT##port ^= (1 << pin)
 #define PINHIGH(port, pin) PORT##port |= (1 << pin)
 #define PINLOW(port, pin) PORT##port &= !(1 << pin)
 #define PINPULLUP(port, pin) PORT##port |= (1 << pin)
@@ -35,6 +36,7 @@
 
 const int pin_scl = 5; //PORTC
 const int pin_sda = 4; //PORTC
+const int pin_speaker = 0; //PORTB
 const char* map_day[] = {
     "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
@@ -45,13 +47,13 @@ volatile uint8_t USART_DATA_INDEX = 0;
 volatile bool USART_BUFFER_READY = false;
 volatile bool alarm_ringing = false;
 
+struct Date {
+    uint8_t date, month, year, day;
+};
+
 struct Time {
     uint8_t seconds, hours, minutes;
     bool am;
-};
-
-struct Date {
-    uint8_t date, month, year, day;
 };
 
 
@@ -349,6 +351,29 @@ uint8_t receiveDataFromRTC(uint8_t address, uint8_t * data, uint8_t dataBytes) {
     return 0; //no error
 }
 
+////////////////////
+// Alarm methods //
+///////////////////
+
+
+void initAlarm() {
+    //set up pin
+    PINMODEOUTPUT(B, pin_speaker);
+    PINLOW(B, pin_speaker);
+
+    //set up timer 400 Hz
+    OCR1A = 625;
+    TCCR1B = (1 << WGM12) // CTC mode 
+            | (1 << CS11) | (1 << CS10); //64 prescalar
+    TIMSK1 = (1 << 1); //interrupt enable 
+}
+
+ISR(TIMER1_COMPA_vect) {
+    if (alarm_ringing) {
+        PINTOGGLE(B, pin_speaker);
+    }
+}
+
 
 /////////////////////
 // Utility methods //
@@ -494,13 +519,38 @@ void RTC_setAlarm0(Time time) {
 }
 
 /*
+    TODO
+
+    0x0B
+    byte 0: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
+    byte 1: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+    byte 2: if Date:        <A1M4> <DY/DT!> <2 bits tens place> <4 bits units place>
+            if Day :                          <2 0> <4 bits day>
+ */
+void RTC_setAlarm1(Time time) {
+    uint8_t data[3];
+    data[0] = (time.minutes%10) | ((time.minutes)/10) << 4;
+    data[1] = (time.hours % 10) | ((time.hours)/10) << 4 | ((!time.am)<<5) | (1 << 6);
+    data[2] = 0x80;
+
+    //make sure alarm-flag is not set 
+    uint8_t flag;
+    receiveDataFromRTC(0x0F, &flag, 1);
+    flag &= !(1 << 0);
+    sendDataToRTC(0x0F, &flag, 1);
+
+    //send data
+    sendDataToRTC(0x0B, data, 3);
+}
+
+/*
 TODO
  */
 bool RTC_checkAlarm0() {
     uint8_t data;
     receiveDataFromRTC(0x0F, &data, 1);
 
-    if (data & (1 << 0)) {
+    if (data & (1 << 0)) { //check alarm 0 flag 
         data &= !(1 << 0);
         sendDataToRTC(0x0F, &data, 1);
         return true;
@@ -509,26 +559,134 @@ bool RTC_checkAlarm0() {
     return false;
 }
 
+/*
+TODO
+ */
+bool RTC_checkAlarm1() {
+    uint8_t data;
+    receiveDataFromRTC(0x0F, &data, 1);
+
+    if (data & (1 << 1)) { //check alarm 1 flag 
+        data &= !(1 << 1);
+        sendDataToRTC(0x0F, &data, 1);
+        return true;
+    }
+
+    return false;
+}
+
+/*
+    TODO
+
+    0x08
+    byte 0: minutes:    <A1M2> <3 bits tens place> <4 bits units place>
+    byte 1: hours:      <A1M3> <12/24!> <20/AM!-PM><10><4 bits units>
+ */
+Time RTC_getAlarm0() {
+    uint8_t data[2]; 
+
+    receiveDataFromRTC(0x08, data, 2);
+    Time t;
+    t.seconds = 0;
+    t.minutes = (data[0] & 0x0F) + ((data[0] & 0x70)>>4) * 10;
+    if (data[1] & 0x40) {
+        //12 hour mode 
+        //set am-pm
+        t.am = !(data[1] & 0x20);
+
+        //get hours
+        t.hours = (data[1] & 0x0F) + ((data[1] & 0x10)>>4) * 10;
+    } 
+    else {
+        //24 hour mode 
+        t.hours = (data[1] & 0x0F); //units place 
+        if (data[1] & 0x20) t.hours += 20;
+        if (data[1] & 0x10) t.hours += 10;
+
+        if (t.hours == 0) {
+            t.hours = 12;
+        } 
+
+        if (t.hours > 12) {
+            t.hours -= 12;
+            t.am = false;
+        }
+        else t.am = true;
+    } 
+
+    return t;
+}
+
+/*
+    Function name: addTime 
+    Input:  Time *time : the time object to be added to 
+            Time toAdd : the amount of time to be added (the am field is ignored)
+    Output: None 
+    Logic:  The time values from toAdd are added to object pointed by time. The overflow checks are done as
+            well, and the am field of time is altered correspondingly.
+    Example call:   Time original, add;
+                    //fill original and add 
+                    addTime(&original, add);
+*/
+void addTime(Time* time, Time toAdd) {
+    time -> seconds += toAdd.seconds;
+    if (time -> seconds > 59) {
+        time -> seconds -= 60;
+        time -> minutes ++;
+    }
+
+    time -> minutes += toAdd.minutes;
+    if (time -> minutes > 59) {
+        time -> minutes -= 60;
+        time -> hours ++;
+    }
+
+    time -> hours += toAdd.hours;
+    if (time -> hours > 12) {
+        time -> hours -= 12;
+        time -> am = ! (time -> am);
+    }
+}
+
+//TODO
+Time TimeSeconds (uint8_t seconds) {
+    Time t;
+    t.seconds = seconds;
+    t.hours = t.minutes = 0;
+    t.am = false;
+    return t;
+}
+
+Time TimeMinutes (uint8_t minutes) {
+    Time t;
+    t.minutes = minutes;
+    t.hours = t.seconds = 0;
+    t.am = false;
+    return t;
+}
+
+Time TimeHours (uint8_t hours) {
+    Time t;
+    t.hours = hours;
+    t.minutes = t.seconds = 0;
+    t.am = false;
+    return t;
+}
+
 int main() {
     initI2C();
     initUSART();
+    initAlarm();
     sei();
 
-    Time time ;
+    Time time, alarm;
     Date date;
-
     char data[32] = "nothing";
 
-    date.day = 2;
-    date.date = 2;
-    date.month = 7;
-    date.year = 19;
-    RTC_sendDate(date);
-
-    time.hours = 9;
-    time.minutes = 11;
-
     while (1) {
+        USART_sendByte('\n');
+        USART_sendData("INTERFACING ARDUINO WITH RTC MODULE DS3231SN\n");
+        USART_sendData("--------------------------------------------\n\n");
 
         //PRINT CURRENT DATE-TIME
         RTC_getDate(&date);
@@ -555,24 +713,30 @@ int main() {
         //PRINT MENU
         USART_sendData("\nENTER \"time\" FOR changing TIME\n");
         USART_sendData("ENTER \"date\" FOR changing DATE\n");
-        USART_sendData("ENTER \"alarm\" FOR setting alarm\n");
+        USART_sendData("ENTER \"alarm\" FOR setting ALARM  (current alarm @ ");
+        alarm = RTC_getAlarm0();
+        USART_sendData((uint16_t)alarm.hours);
+        USART_sendData(": ");
+        USART_sendData((uint16_t)alarm.minutes);
+        USART_sendData(" ");
+        if (alarm.am) USART_sendData("am)\n");
+        else USART_sendData("pm)\n");
         USART_sendData("ANYTHING ELSE WILL DISPLAY Now\n");
 
         //wait for user-input
         while (!USART_BUFFER_READY) {
-            if (RTC_checkAlarm0()) {
-                if (alarm_ringing) {
-                    USART_sendData("Alarm stopped!");
-                    alarm_ringing = false;
-                }
-                else {
-                    USART_sendData("\n\nALARM HIT!\n\n");
-                    alarm_ringing = true;
-                    time.minutes += 2;
-                    RTC_setAlarm0(time);
-                    time.minutes -= 2;
-                }
+            if (RTC_checkAlarm0()) { 
+                USART_sendData("\n\nALARM RINGING - Enter \"stop\" to stop ringing.\n");
+                USART_sendData("Enter \"snooze\" to snooze for 10 minutes\n");
+                alarm_ringing = true;
+                Time temp = time;
+                addTime(&temp, TimeMinutes(2));
+                RTC_setAlarm1(temp);
             } 
+
+            if (RTC_checkAlarm1()) {
+                alarm_ringing = false;
+            }
         }
 
         USART_readBuffer(data);
@@ -697,6 +861,17 @@ int main() {
 
             RTC_setAlarm0(time);
         } 
+        else if (strcmp(data, "stop") == 0) {
+            alarm_ringing = false;
+        }
+        else if (strcmp(data, "snooze") == 0) {
+            if (alarm_ringing) {
+                alarm_ringing = false;
+                Time temp = time;
+                addTime(&temp, TimeMinutes(11));
+                RTC_setAlarm0(temp);
+            }
+        }
     }
     
     return 0;
