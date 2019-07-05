@@ -892,7 +892,11 @@ Time TimeDifference(Time t1, Time t2) {
 }
 
 /*
-    TODO fill this 
+    Function name: startStopwatch
+    Input:  None
+    Output: None
+    Logic:  Get the current time and store it
+    Example call: startStopwatch();
  */
 void startStopwatch() {
     STOPWATCH_COUNTING = true;
@@ -902,7 +906,12 @@ void startStopwatch() {
 }
 
 /*
-    TODO fill this 
+    Function name: stopStopwatch
+    Input:  none
+    Output: Time : time elapsed
+    Logic:  Get the current time and return the difference between current time and 
+            the previously stored one
+    Example call: Time elapsed = stopStopwatch();
  */
 Time stopStopwatch() {
     STOPWATCH_COUNTING = false;
