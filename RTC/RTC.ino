@@ -973,6 +973,7 @@ int main() {
         } 
         else if (strcmp(data, "stop") == 0) {
             alarm_ringing = false;
+            RTC_setAlarm1(time);
         }
         else if (strcmp(data, "snooze") == 0) {
             if (alarm_ringing) {
@@ -980,6 +981,7 @@ int main() {
                 Time temp = time;
                 addTime(&temp, TimeMinutes(11));
                 RTC_setAlarm0(temp);
+                RTC_setAlarm1(time);
             }
         }
     }
